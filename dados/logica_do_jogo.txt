@@ -1,0 +1,327 @@
+LOGICA DO JOGO - PIPELINE DE MOVIMENTACAO
+===========================================================================
+Arquivos usados neste texto:
+  fanorona/model/game_engine.py
+  fanorona/model/board.py
+
+
+0. ESTADO INICIAL - GameEngine.__init__ (game_engine.py, linha 41)
+---------------------------------------------------------------------------
+E onde current_turn, active_piece, last_direction e visited_this_turn
+nascem, antes de qualquer jogada acontecer.
+
+
+1. PONTO DE ENTRADA - try_move(frm, to, choice) (game_engine.py, linha 96)
+---------------------------------------------------------------------------
+Tudo que envolve mover uma peca passa por essa unica funcao. E chamada
+tanto quando eu clico e movo localmente quanto quando reaplico uma
+jogada que chegou pela rede. Nenhuma linha dela sabe que existe rede -
+e 100% local.
+
+
+FASE 1 - VALIDACOES SEQUENCIAIS (game_engine.py, linhas 103 a 120)
+---------------------------------------------------------------------------
+Cada checagem, se falhar, retorna INVALID na hora e para tudo ali.
+
+  1. self.game_over                                    (linha 103-104)
+     Se a partida ja acabou, rejeita.
+
+  2. frm.in_bounds() / to.in_bounds()                   (linha 105-106)
+     As coordenadas precisam estar dentro do tabuleiro 5 linhas x 9 colunas.
+
+  3. self.board.piece_at(frm) is not self.current_turn  (linha 107-108)
+     A peca em frm precisa ser da cor de quem joga agora.
+
+  4. self.is_mid_chain() and frm != self.active_piece   (linha 109-110)
+     is_mid_chain esta definida em game_engine.py, linha 53.
+     Se estou no meio de uma cadeia de capturas, so a peca que ja esta
+     capturando pode se mover - nao posso trocar de peca no meio da cadeia.
+
+  5. not self.board.is_empty(to)                        (linha 111-112)
+     O destino precisa estar vazio. is_empty esta em board.py, linha 48.
+
+  6. Direction.between(frm, to) / board.is_connected    (linha 114-116)
+     is_connected esta em board.py, linha 67 - e a checagem geometrica
+     de linha entre as duas casas. Linhas retas (horizontal/vertical)
+     sempre existem; diagonais so existem em metade das celulas do
+     tabuleiro (calculado por paridade dentro dessa mesma funcao) - e
+     isso que forma o desenho de "X" alternados caracteristico do
+     tabuleiro de Fanorona.
+
+  7. to in self.visited_this_turn                       (linha 117-118)
+     Nao posso repetir uma casa ja visitada nesta cadeia de capturas.
+
+  8. self.is_mid_chain() and d == self.last_direction    (linha 119-120)
+     Nao posso repetir a mesma direcao do passo anterior da cadeia
+     (evita ficar capturando pra frente e pra tras infinitamente).
+
+
+FASE 2 - CALCULAR OPCOES DE CAPTURA (game_engine.py, linha 122)
+---------------------------------------------------------------------------
+  options = self._compute_capture_options(frm, to, d)
+
+  _compute_capture_options esta em game_engine.py, linha 179.
+  Ela chama _collect_capture_line (game_engine.py, linha 193) DUAS vezes:
+
+  - linha 183-185: a partir de "to", na MESMA direcao do movimento (d)
+      -> opcao de captura por APROXIMACAO (approach)
+      -> a peca se move em direcao as pecas adversarias e "empurra"
+         a captura pra frente
+
+  - linha 187-189: a partir de "frm", na direcao OPOSTA (d.opposite())
+      -> opcao de captura por AFASTAMENTO (withdrawal)
+      -> a peca se afasta, capturando pecas que estavam coladas
+         atras da posicao de origem
+
+  _collect_capture_line (linha 193-208) caminha casa por casa naquela
+  direcao enquanto encontrar pecas ADVERSARIAS consecutivas ligadas por
+  linha valida, parando quando acha casa vazia, peca da propria cor, ou
+  fim do tabuleiro conectado.
+
+
+FASE 3 - DECIDIR O QUE FAZER COM AS OPCOES (game_engine.py, linhas 124 a 140)
+---------------------------------------------------------------------------
+  ZERO opcoes (not options)                              (linha 124-131)
+      - se estou no meio de uma cadeia -> INVALID          (linha 125-127)
+        (continuacao de cadeia e obrigada a capturar algo)
+      - se e jogada nova -> move_piece(frm, to) + _end_turn()  (linha 129-131)
+        -> retorna SIMPLE_MOVE_TURN_ENDED
+
+  UMA opcao                                               (linha 133-134)
+      - usa ela direto, sem perguntar nada ao jogador
+
+  DUAS opcoes e choice = None                             (linha 135-136)
+      - retorna NEEDS_CHOICE SEM ALTERAR NADA no tabuleiro
+      - a interface precisa chamar try_move de novo, agora informando
+        a escolha do jogador (APPROACH ou WITHDRAWAL)
+
+  DUAS opcoes e choice informado                          (linha 137-140)
+      - procura a opcao que bate com o choice recebido
+
+
+FASE 4 - APLICAR A CAPTURA (game_engine.py, linhas 143 a 160)
+---------------------------------------------------------------------------
+  board.move_piece(frm, to)                               (linha 143)
+      move_piece esta em board.py, linha 57.
+  para cada peca capturada: board.clear(ponto_capturado)   (linha 144-145)
+      clear esta em board.py, linha 54.
+
+  Atualiza o estado da cadeia                              (linha 147-150)
+      visited_this_turn.add(frm)
+      visited_this_turn.add(to)
+      active_piece = to
+      last_direction = d
+
+  Depois:
+      1. _check_win_by_elimination()                       (linha 152-153)
+         definida em game_engine.py, linha 224.
+         Zerou as pecas de um dos lados? se sim, jogo acaba aqui.
+
+      2. legal_destinations(to) esta vazio?                 (linha 156-160)
+         - SIM -> _end_turn() -> retorna CAPTURE_CHAIN_ENDED   (linha 157-158)
+           _end_turn esta em game_engine.py, linha 210.
+           (nao ha mais captura possivel, turno passa pro adversario)
+         - NAO -> retorna CAPTURE_CHAIN_CONTINUES, sem chamar _end_turn()
+           (linha 160)
+           (o jogo espera o proximo clique com a MESMA peca, ou o
+           jogador aciona o botao de encerrar voluntariamente)
+
+
+A FUNCAO IRMA: legal_destinations(frm) (game_engine.py, linha 60)
+---------------------------------------------------------------------------
+Usada em dois lugares diferentes:
+  1. Para destacar visualmente na tela quais casas sao destinos validos
+     quando o jogador seleciona uma peca (chamada fora do try_move,
+     pela interface).
+  2. Dentro do proprio try_move (linha 156), pra decidir se uma cadeia
+     de capturas pode continuar depois de aplicada.
+
+E basicamente as mesmas validacoes da Fase 1 de try_move, mas SEM
+aplicar nada de verdade - so testa cada direcao valida a partir de
+"frm" (usando board.valid_directions_from, board.py linha 89) e
+devolve a lista de destinos que passariam todas as checagens.
+
+
+OUTRAS FUNCOES DO MESMO ARQUIVO (fora do fluxo de mover peca)
+---------------------------------------------------------------------------
+  end_chain_voluntarily   (game_engine.py, linha 162) - botao de encerrar
+                           cadeia de captura por vontade propria
+  resign                  (game_engine.py, linha 167) - desistencia
+  _has_any_legal_move     (game_engine.py, linha 237) - usada dentro de
+                           _end_turn pra checar se o proximo jogador
+                           ainda tem alguma jogada possivel
+
+  ResultType (enum com os 5 tipos de resultado)  (game_engine.py, linha 22)
+  Result (dataclass do retorno de try_move)       (game_engine.py, linha 31)
+
+Dica: os numeros de linha valem pro codigo como esta agora. Se editar
+esses arquivos depois, as linhas podem deslocar - nesse caso e so abrir
+o arquivo e usar Ctrl+F com o nome da funcao (ex: "def try_move").
+
+
+DIAGRAMA RESUMIDO DO FLUXO
+---------------------------------------------------------------------------
+try_move(frm, to, choice)                                  [linha 96]
+ |
+ |-- validacoes de forma (posicao, vez, cadeia, conexao)    [linhas 103-120]
+ |     falhou em qualquer uma -> INVALID
+ |
+ |-- _compute_capture_options(frm, to, d)                   [linha 122/179]
+ |     |-- _collect_capture_line(to, d)            [linha 183] -> APPROACH
+ |     `-- _collect_capture_line(frm, d.opposite())[linha 187] -> WITHDRAWAL
+ |
+ |-- 0 opcoes   -> move simples -> _end_turn() -> SIMPLE_MOVE_TURN_ENDED
+ |     [linhas 124-131]
+ |-- 2 opcoes + choice=None -> NEEDS_CHOICE (pausa, nao aplica nada)
+ |     [linha 135-136]
+ |
+ `-- opcao escolhida (1 opcao, ou 2 + choice ja definido)   [linhas 143-160]
+       |-- aplica movimento + remove pecas capturadas       [linha 143-145]
+       |-- atualiza visited_this_turn / active_piece / last_direction
+       |     [linha 147-150]
+       |-- _check_win_by_elimination()                      [linha 152]
+       `-- legal_destinations(to) vazio?                    [linha 156]
+             |-- sim -> _end_turn() -> CAPTURE_CHAIN_ENDED   [linha 157-158]
+             `-- nao -> CAPTURE_CHAIN_CONTINUES               [linha 160]
+
+
+PONTO-CHAVE PRA FALAR NA APRESENTACAO
+---------------------------------------------------------------------------
+Esse pipeline inteiro e local e deterministico: mesmo estado do tabuleiro
++ mesmo (frm, to, choice) sempre da o mesmo resultado. A rede so entra
+DEPOIS que try_move ja devolveu um resultado aceito - e exatamente esse
+mesmo (frm, to, choice) que e mandado pro adversario, que roda o MESMO
+try_move (game_engine.py, linha 96) do lado dele pra chegar no mesmo
+resultado. A rede nao manda "como ficou o tabuleiro", manda "o que foi
+decidido".
+
+
+
+===========================================================================
+PARTE 2 - COMO A JOGADA VIAJA ATE O OUTRO TABULEIRO (REDE)
+===========================================================================
+Arquivos usados nesta parte:
+  fanorona/gui/game_screen.py
+  fanorona/net/game_connection.py
+  fanorona/gui/main_app.py
+
+Aqui comeca exatamente onde a Parte 1 termina: try_move ja devolveu um
+resultado ACEITO (nao-INVALID). A partir daqui, a jogada precisa avisar
+o adversario.
+
+
+5. ENFILEIRAR A JOGADA - _apply_local_result (game_screen.py, linha 177)
+---------------------------------------------------------------------------
+Em TODOS os 3 branches de resultado aceito, a primeira coisa que acontece
+e chamar connection.send_move - so DEPOIS vem o redraw():
+
+  SIMPLE_MOVE_TURN_ENDED     -> send_move (linha 183) -> redraw depois
+  CAPTURE_CHAIN_CONTINUES    -> send_move (linha 188) -> redraw depois
+  CAPTURE_CHAIN_ENDED        -> send_move (linha 193) -> redraw depois
+
+Ou seja: meu tabuleiro muda na tela ANTES de eu saber se a mensagem ja
+saiu pela rede - send_move so enfileira, nao bloqueia.
+
+
+6. MONTAR A STRING DO PROTOCOLO - send_move (game_connection.py, linha 163)
+---------------------------------------------------------------------------
+  choice_name = "NONE" if choice is None else choice.name    (linha 164)
+  self._enqueue(f"MOVE {frm.row} {frm.col} {to.row} {to.col} {choice_name}")
+                                                                (linha 165)
+
+Nao escreve no socket - so monta o texto (ex: "MOVE 1 2 2 3 NONE") e
+chama _enqueue, que poe na fila _outgoing e retorna na hora.
+
+
+7. A THREAD DE ESCRITA - _write_loop (game_connection.py, linha 121)
+---------------------------------------------------------------------------
+  line = self._outgoing.get()   -> bloqueia ate ter algo   (linha 123)
+  self._writer.write(line + "\n")                          (linha 127)
+  self._writer.flush()                                      (linha 128)
+
+E so aqui, numa thread separada (fanorona-net-writer), que os bytes
+realmente saem pelo socket.
+
+
+8. DO OUTRO LADO: A THREAD DE LEITURA - _read_loop (game_connection.py,
+   linha 109)
+---------------------------------------------------------------------------
+  for line in self._reader:            -> bloqueada em readline (linha 111)
+      self._dispatch(line, event_queue)                          (linha 112)
+
+Roda na thread fanorona-net-reader do OUTRO processo. So repassa a
+linha recebida pro _dispatch - nao mexe em tela nenhuma.
+
+
+9. TRADUZIR TEXTO EM EVENTO - _dispatch, bloco MOVE (game_connection.py,
+   linha 132, bloco MOVE na linha 138)
+---------------------------------------------------------------------------
+  if trimmed.startswith("MOVE "):                             (linha 138)
+      parts = trimmed.split(" ")                               (linha 139)
+      fr, fc, tr, tc = int(...), int(...), int(...), int(...)  (linha 143)
+      choice = CaptureType[parts[5]]                            (linha 144)
+      event_queue.put(("move", Point(fr, fc), Point(tr, tc), choice))
+                                                                 (linha 145)
+
+Transforma a string "MOVE 1 2 2 3 NONE" de volta numa tupla Python e
+poe na fila de eventos (event_queue) - ainda dentro da thread de leitura.
+
+
+10. A THREAD PRINCIPAL CONSOME A FILA - _poll_events / _handle_event
+    (main_app.py, linhas 93 e 102)
+---------------------------------------------------------------------------
+  event = self.event_queue.get_nowait()          (linha 96, dentro de _poll_events)
+  self._handle_event(event)                       (linha 97)
+
+  Dentro de _handle_event (linha 102):
+    if kind == "move" ...                          (linha 105)
+        self.active_game_screen.apply_remote_move(frm, to, choice)
+                                                     (linha 107)
+
+_poll_events roda a cada 50ms (POLL_INTERVAL_MS), chamada via
+root.after - e sempre na thread principal do processo do adversario,
+nunca na thread de leitura.
+
+
+11. REAPLICAR A JOGADA - apply_remote_move (game_screen.py, linha 287)
+---------------------------------------------------------------------------
+  effective = None if choice == CaptureType.NONE else choice  (linha 288)
+  result = self.engine.try_move(frm, to, effective)            (linha 289)
+  self.board_canvas.redraw()                                    (linha 292)
+  self._refresh_status()                                        (linha 293)
+
+Chama o MESMISSIMO try_move (Parte 1, linha 96) do engine desse
+processo - nao copia o tabuleiro do adversario, recalcula o resultado
+localmente a partir de (frm, to, choice). So depois disso o
+board_canvas.redraw() atualiza o que aparece na tela do outro jogador.
+
+
+DIAGRAMA RESUMIDO DA PARTE 2
+---------------------------------------------------------------------------
+_apply_local_result (game_screen.py:177)
+ |-- send_move(frm, to, choice)              [game_screen.py:183/188/193]
+ |     `-- _enqueue(string do protocolo)      [game_connection.py:163-165]
+ |
+ |-- (thread fanorona-net-writer)
+ |     _write_loop: get() -> write() -> flush()  [game_connection.py:121-128]
+ |
+ |========== atravessa o socket ==========
+ |
+ |-- (thread fanorona-net-reader, OUTRO processo)
+ |     _read_loop: readline() -> _dispatch()   [game_connection.py:109-112]
+ |     _dispatch: parse "MOVE ..." -> event_queue.put(...)
+ |                                              [game_connection.py:138-145]
+ |
+ |-- (thread principal do OUTRO processo)
+ |     _poll_events (a cada 50ms) -> _handle_event  [main_app.py:93-107]
+ |     apply_remote_move -> try_move de novo -> redraw()
+ |                                              [game_screen.py:287-293]
+
+
+PONTO-CHAVE DA PARTE 2
+---------------------------------------------------------------------------
+Da Fase 4 da Parte 1 (onde try_move decide o resultado) ate aqui, so
+tres coisas atravessam a rede: de onde (frm), pra onde (to) e qual
+escolha de captura (choice) - nunca o estado do tabuleiro em si. Quem
+reconstroi o resultado e o proprio try_move rodando de novo, do outro
+lado.

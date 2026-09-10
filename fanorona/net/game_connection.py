@@ -105,6 +105,7 @@ class GameConnection:
         self._reader_thread.start()
         self._writer_thread.start()
 
+    # [TOUR 7/10] Do outro processo: esta thread está bloqueada em readline(), recebe a linha.
     def _read_loop(self, event_queue: "queue.Queue") -> None:
         try:
             for line in self._reader:
@@ -116,6 +117,7 @@ class GameConnection:
                 self._closed = True
                 event_queue.put(("disconnected", "Conexão perdida com o adversário."))
 
+    # [TOUR 6/10] Thread separada: tira da fila e faz o write()/flush() de verdade no socket.
     def _write_loop(self) -> None:
         while True:
             line = self._outgoing.get()  # bloqueia até ter algo para enviar
@@ -132,6 +134,7 @@ class GameConnection:
         if not trimmed:
             return
 
+        # [TOUR 8/10] Parsing: vira uma tupla e vai pra fila de eventos — não mexe na tela direto.
         if trimmed.startswith("MOVE "):
             parts = trimmed.split(" ")
             if len(parts) < 6:
@@ -156,6 +159,7 @@ class GameConnection:
     # no socket é a thread de escrita (_write_loop).
     # -----------------------------------------------------------------
 
+    # [TOUR 5/10] Não escreve no socket — só monta a string do protocolo e enfileira.
     def send_move(self, frm: Point, to: Point, choice: Optional[CaptureType]) -> None:
         choice_name = "NONE" if choice is None else choice.name
         self._enqueue(f"MOVE {frm.row} {frm.col} {to.row} {to.col} {choice_name}")

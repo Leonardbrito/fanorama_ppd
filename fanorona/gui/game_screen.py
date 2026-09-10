@@ -121,6 +121,7 @@ class GameScreen(tk.Frame):
     def _handle_point_clicked(self, p: Point) -> None:
         if self.engine.game_over:
             return
+        # [TOUR 1/10] Todo clique passa por aqui primeiro: se não é minha vez, nem processa.
         if self.engine.current_turn is not self.my_color:
             return  # não é sua vez
 
@@ -147,6 +148,8 @@ class GameScreen(tk.Frame):
     def _select(self, p: Point) -> None:
         self.selected = p
         self.board_canvas.set_selected(p)
+        # [TOUR 2/10] Seleção é só local/visual: o model calcula os destinos possíveis
+        # aqui embaixo — nada disso vai pra rede ainda.
         self.board_canvas.set_highlighted(self.engine.legal_destinations(p))
 
     def _deselect(self) -> None:
@@ -155,6 +158,7 @@ class GameScreen(tk.Frame):
         self.board_canvas.set_highlighted([])
 
     def _attempt_move(self, frm: Point, to: Point) -> None:
+        # [TOUR 3/10] Aqui a jogada é validada e aplicada de verdade no meu tabuleiro local.
         result = self.engine.try_move(frm, to, None)
 
         if result.type == ResultType.NEEDS_CHOICE:
@@ -168,6 +172,8 @@ class GameScreen(tk.Frame):
 
         self._apply_local_result(frm, to, result)
 
+    # [TOUR 4/10] Em todo branch aceito abaixo, send_move() enfileira pra rede ANTES do
+    # redraw() — meu tabuleiro já muda na tela antes de eu me preocupar com o outro lado.
     def _apply_local_result(self, frm: Point, to: Point, result) -> None:
         if result.type == ResultType.INVALID:
             self.bell()
@@ -276,6 +282,8 @@ class GameScreen(tk.Frame):
     # Eventos recebidos pela rede (repassados pelo MainApp)
     # -----------------------------------------------------------------
 
+    # [TOUR 10/10] Chegada pela rede: mesmíssimo try_move, agora reprocessando a jogada
+    # que já foi decidida do outro lado — não é sincronizar estado, é replicar a decisão.
     def apply_remote_move(self, frm: Point, to: Point, choice: CaptureType) -> None:
         effective = None if choice == CaptureType.NONE else choice
         result = self.engine.try_move(frm, to, effective)

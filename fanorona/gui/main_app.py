@@ -89,6 +89,7 @@ class MainApp:
     # Fila de eventos de rede: repassa cada evento para a tela de jogo ativa
     # -----------------------------------------------------------------
 
+    # [TOUR 9/10] A cada 50ms (POLL_INTERVAL_MS), a thread principal esvazia a fila de rede.
     def _poll_events(self) -> None:
         try:
             while True:
