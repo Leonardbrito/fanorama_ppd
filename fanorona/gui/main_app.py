@@ -22,7 +22,7 @@ POLL_INTERVAL_MS = 50  # frequência com que a fila de eventos de rede é verifi
 class MainApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Fanorona — Sockets")
+        self.root.title("Fanorona — RMI/RPC")
         self.root.configure(bg=theme.APP_BG)
         self.root.resizable(False, False)
 
@@ -89,7 +89,6 @@ class MainApp:
     # Fila de eventos de rede: repassa cada evento para a tela de jogo ativa
     # -----------------------------------------------------------------
 
-    # [TOUR 9/10] A cada 50ms (POLL_INTERVAL_MS), a thread principal esvazia a fila de rede.
     def _poll_events(self) -> None:
         try:
             while True:
@@ -115,5 +114,8 @@ class MainApp:
             self._launch_new_game()
         elif kind == "disconnected":
             self.active_game_screen = None
+            if self.connection is not None:
+                self.connection.close()  # libera o servidor RPC (e a porta) antes de poder hospedar de novo
+                self.connection = None
             messagebox.showwarning("Conexão perdida", event[1])
             self._show_connect_screen()

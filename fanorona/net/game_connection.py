@@ -1,37 +1,48 @@
-"""Envolve um socket já conectado (servidor/host ou cliente) e implementa
-um protocolo de texto simples, uma mensagem por linha:
+"""Comunicação entre os dois tabuleiros usando RPC (XML-RPC, biblioteca
+padrão `xmlrpc` do Python). Não há sockets nem protocolo de texto escrito
+à mão: cada tabuleiro é, ao mesmo tempo, SERVIDOR e CLIENTE.
 
-    HELLO nome                -> identificação inicial (troca de nomes, antes de start())
-    MOVE fr fc tr tc CHOICE    -> jogada (CHOICE = NONE, APPROACH ou WITHDRAWAL)
-    ENDTURN                    -> jogador encerrou voluntariamente a sequência de capturas
-    RESIGN                     -> jogador desistiu da partida
-    REMATCH                    -> jogador pediu revanche (reinicia a partida dos dois lados)
-    CHAT texto...              -> mensagem de bate-papo (resto da linha)
+  * Como SERVIDOR, expõe os métodos da classe `_GameService` (register,
+    move, end_turn, resign, rematch, chat, ping, bye). É o adversário quem
+    chama esses métodos, e a execução acontece AQUI.
+  * Como CLIENTE, mantém um `ServerProxy` (o "stub" do RMI) que representa
+    o servidor do adversário. Escrever `proxy.move(1, 2, 2, 3, "NONE")` faz
+    a biblioteca montar o XML, mandar por HTTP, executar `move` na outra
+    máquina e devolver a resposta.
 
-CONCORRÊNCIA — duas threads por conexão, uma para cada sentido:
+    Jogador A                               Jogador B
+    [servidor RPC: move, chat, ...]  <----  [proxy de A]
+    [proxy de B]  ---------------------->   [servidor RPC: move, chat, ...]
 
-  * Thread de LEITURA (`_read_loop`): fica bloqueada em `readline()`
-    esperando dados chegarem do socket. Como isso bloquearia a interface
-    inteira se rodasse na thread principal, ela roda numa thread própria,
-    criada em `start()`. Cada mensagem recebida vira um evento colocado
-    numa `queue.Queue` (nunca é aplicado direto na tela dali).
+Correspondência com as antigas mensagens de texto:
 
-  * Thread de ESCRITA (`_write_loop`): os métodos `send_*` NÃO escrevem
-    no socket diretamente — eles só colocam a linha numa fila de saída
-    (`_outgoing`) e retornam na hora. Quem realmente escreve no socket é
-    essa thread separada, também criada em `start()`, que fica em loop
-    tirando linhas da fila e mandando pela rede. Isso evita que a
-    interface trave caso o envio demore (buffer do socket cheio, rede
-    lenta etc.) e mantém envio e recepção completamente independentes
-    um do outro.
+    HELLO nome      ->  register(porta, nome)
+    MOVE fr fc ...  ->  move(fr, fc, tr, tc, choice)   (choice = NONE, APPROACH ou WITHDRAWAL)
+    ENDTURN         ->  end_turn()
+    RESIGN          ->  resign()
+    REMATCH         ->  rematch()
+    CHAT texto      ->  chat(texto)
+    (novo)          ->  ping()  /  bye()
 
-Por que os eventos recebidos não atualizam a tela diretamente: o
-Tkinter (como a maioria das bibliotecas gráficas) não é thread-safe —
-só a thread principal pode mexer nos widgets. Por isso a thread de
-leitura só empilha eventos numa `queue.Queue`; quem efetivamente aplica
-cada evento na tela é a janela principal (veja `gui/main_app.py`),
-retirando da fila periodicamente via `root.after(...)`, que sempre roda
-na thread principal.
+CONCORRÊNCIA:
+
+  * Servidor (`_ThreadedXMLRPCServer`): roda numa thread própria
+    (`serve_forever`) e atende cada chamada recebida em mais uma thread.
+    Cada método exposto só coloca um evento numa `queue.Queue` e retorna.
+    Os eventos NÃO mexem na tela direto: o Tkinter não é thread-safe, então
+    quem aplica os eventos é a janela principal (`gui/main_app.py`),
+    esvaziando a fila via `root.after(...)` na thread principal.
+
+  * Cliente (`_write_loop`): chamar um método remoto bloqueia até a
+    resposta chegar. Por isso os métodos `send_*` NÃO chamam o adversário
+    diretamente: só enfileiram a chamada em `_outgoing` e retornam. Uma
+    única thread de escrita tira da fila e faz as chamadas RPC uma a uma,
+    o que também garante que as jogadas cheguem NA ORDEM.
+
+  * Detecção de queda: RPC não mantém conexão aberta. Quando a fila de saída
+    fica parada por `PING_INTERVAL_S` segundos, a thread de escrita chama
+    `ping()` no adversário; se qualquer chamada falhar, vira o evento
+    "disconnected". Ao sair da partida normalmente, `close()` avisa com `bye()`.
 
 Cada evento colocado na fila de entrada é uma tupla começando com um nome:
     ("move", from_point, to_point, capture_type)
@@ -42,157 +53,265 @@ Cada evento colocado na fila de entrada é uma tupla começando com um nome:
     ("disconnected", motivo)
 """
 
+import http.client
 import queue
-import socket
+import socketserver
 import threading
+import xmlrpc.client
 from typing import Optional
+from xmlrpc.server import SimpleXMLRPCServer
 
 from ..model.capture_option import CaptureType
 from ..model.point import Point
 
+PING_INTERVAL_S = 3     # sem nada a enviar por este tempo -> chama ping() no adversário
+CALL_TIMEOUT_S = 10     # tempo máximo esperando a resposta de uma chamada remota
+
+# Erros que uma chamada remota pode levantar (rede fora do ar, HTTP/XML-RPC inválido, Fault...).
+RPC_ERRORS = (OSError, xmlrpc.client.Error, http.client.HTTPException)
+
 # Sentinela colocada na fila de saída para avisar a thread de escrita
-# que ela deve parar (não pode ser confundida com uma mensagem real,
-# já que todas as mensagens reais são strings).
+# que ela deve parar (não pode ser confundida com uma chamada real,
+# já que todas as chamadas reais são tuplas).
 _STOP = object()
 
+# Guarda o IP de quem está fazendo a chamada atual (uma thread por requisição).
+_request_ctx = threading.local()
 
-def _sanitize(text: str) -> str:
-    """Remove quebras de linha para não corromper o protocolo baseado em linhas."""
-    return text.replace("\n", " ").replace("\r", " ")
+
+class _TimeoutTransport(xmlrpc.client.Transport):
+    """Transporte HTTP do ServerProxy com timeout (o padrão espera para sempre)."""
+
+    def __init__(self, timeout: float) -> None:
+        super().__init__()
+        self._timeout = timeout
+
+    def make_connection(self, host):
+        conn = super().make_connection(host)
+        conn.timeout = self._timeout
+        return conn
+
+
+class _ThreadedXMLRPCServer(socketserver.ThreadingMixIn, SimpleXMLRPCServer):
+    """Servidor XML-RPC que atende cada requisição em uma thread."""
+
+    daemon_threads = True
+
+    def finish_request(self, request, client_address):
+        # Roda na thread da requisição: guarda o IP do chamador para o
+        # `register` descobrir como chamar de volta (sem ele precisar informar).
+        _request_ctx.client_ip = client_address[0]
+        super().finish_request(request, client_address)
+
+
+class _GameService:
+    """Métodos que o ADVERSÁRIO pode chamar em mim (a parte "servidor").
+
+    Só métodos públicos são expostos pelo xmlrpc (nomes com `_` ficam
+    privados). Cada um converte a chamada em um evento da fila.
+    """
+
+    def __init__(self, conn: "GameConnection") -> None:
+        self._conn = conn
+
+    def register(self, port: int, name: str) -> str:
+        """Apresentação inicial: quem entra informa a porta do próprio servidor
+        e o nome; recebe de volta o nome de quem hospeda."""
+        return self._conn._on_register(_request_ctx.client_ip, int(port), str(name))
+
+    def move(self, fr: int, fc: int, tr: int, tc: int, choice: str) -> bool:
+        self._conn._emit(("move", Point(int(fr), int(fc)), Point(int(tr), int(tc)), CaptureType[choice]))
+        return True
+
+    def end_turn(self) -> bool:
+        self._conn._emit(("endturn",))
+        return True
+
+    def resign(self) -> bool:
+        self._conn._emit(("resign",))
+        return True
+
+    def rematch(self) -> bool:
+        self._conn._emit(("rematch",))
+        return True
+
+    def chat(self, message: str) -> bool:
+        self._conn._emit(("chat", str(message)))
+        return True
+
+    def ping(self) -> bool:
+        return True
+
+    def bye(self) -> bool:
+        self._conn._on_peer_left()
+        return True
 
 
 class GameConnection:
-    def __init__(self, sock: socket.socket) -> None:
-        self._sock = sock
-        # makefile com newline="\n" e um só espaço de nomes evita surpresas
-        # de tradução de fim de linha entre plataformas.
-        self._reader = sock.makefile("r", encoding="utf-8", newline="\n")
-        self._writer = sock.makefile("w", encoding="utf-8", newline="\n")
+    def __init__(self, my_name: str) -> None:
+        self.my_name = my_name
+        self.peer_name = ""
+        self._peer: Optional[xmlrpc.client.ServerProxy] = None  # proxy para o servidor do adversário
+        self._server: Optional[_ThreadedXMLRPCServer] = None
+        self._server_lock = threading.Lock()
+
+        self._peer_ready = threading.Event()  # host: alguém chamou register (ou foi cancelado)
+        self._cancelled = False
         self._closed = False
+        self._peer_gone = False  # o adversário já avisou que saiu (bye)
+
+        self._event_queue: Optional["queue.Queue"] = None
+        self._pending: list = []  # eventos que chegaram antes de start()
+        self._events_lock = threading.Lock()
+
         self._outgoing: "queue.Queue" = queue.Queue()
-        self._reader_thread: Optional[threading.Thread] = None
         self._writer_thread: Optional[threading.Thread] = None
 
-    def exchange_names(self, my_name: str) -> str:
-        """Troca de identificação inicial: envia o próprio nome e bloqueia
-        até receber o nome do adversário. É a única parte do protocolo
-        feita de forma síncrona (faz sentido, já que é uma etapa única de
-        "aperto de mão" antes da partida começar) — deve ser chamada antes
-        de `start()`, na mesma thread que estabeleceu a conexão (fora da
-        thread principal da interface).
-        """
-        self._writer.write(f"HELLO {_sanitize(my_name)}\n")
-        self._writer.flush()
-        line = self._reader.readline()
-        if not line:
-            raise ConnectionError("Conexão encerrada durante a identificação.")
-        line = line.strip()
-        if not line.startswith("HELLO "):
-            raise ConnectionError("Protocolo inesperado durante a identificação.")
-        peer_name = line[len("HELLO "):].strip()
-        return peer_name or "Adversário"
+    # -----------------------------------------------------------------
+    # Estabelecer a conexão (usado por NetworkSetup)
+    # -----------------------------------------------------------------
+
+    def listen(self, port: int) -> None:
+        """Sobe o servidor RPC desta máquina (porta 0 = o sistema escolhe uma livre)."""
+        server = _ThreadedXMLRPCServer(("", port), logRequests=False, allow_none=True)
+        server.register_instance(_GameService(self))
+        self._server = server
+        threading.Thread(target=server.serve_forever, daemon=True, name="fanorona-rpc-server").start()
+
+    @property
+    def listen_port(self) -> int:
+        return self._server.server_address[1]
+
+    def wait_for_peer(self) -> Optional[str]:
+        """Host: bloqueia até o adversário chamar `register`. Devolve o nome
+        dele, ou None se a espera foi cancelada."""
+        self._peer_ready.wait()
+        return None if self._cancelled else self.peer_name
+
+    def connect_to(self, host: str, port: int) -> str:
+        """Quem entra: cria o proxy para o servidor do host e chama `register`,
+        informando a porta do próprio servidor para o host poder chamar de volta.
+        Devolve o nome do host."""
+        self._peer = self._make_proxy(host, port)
+        self.peer_name = self._peer.register(self.listen_port, self.my_name) or "Adversário"
+        return self.peer_name
+
+    def cancel(self) -> None:
+        """Host: desiste de esperar o adversário."""
+        self._cancelled = True
+        self._peer_ready.set()
+        self._shutdown_server()
+
+    @staticmethod
+    def _make_proxy(host: str, port: int) -> xmlrpc.client.ServerProxy:
+        return xmlrpc.client.ServerProxy(
+            f"http://{host}:{port}", transport=_TimeoutTransport(CALL_TIMEOUT_S), allow_none=True
+        )
+
+    def _on_register(self, client_ip: str, port: int, name: str) -> str:
+        """Executado quando o adversário chama `register` aqui (lado do host)."""
+        if self._peer is not None or self._cancelled:
+            raise RuntimeError("Esta partida já tem dois jogadores.")
+        self._peer = self._make_proxy(client_ip, port)
+        self.peer_name = name.strip() or "Adversário"
+        self._peer_ready.set()
+        return self.my_name
+
+    # -----------------------------------------------------------------
+    # Partida em andamento
+    # -----------------------------------------------------------------
 
     def start(self, event_queue: "queue.Queue") -> None:
-        """Inicia as duas threads da conexão: uma só lê do socket, a
-        outra só escreve — rodando em paralelo, sem uma bloquear a outra.
-        """
-        self._reader_thread = threading.Thread(
-            target=self._read_loop, args=(event_queue,), daemon=True, name="fanorona-net-reader"
-        )
-        self._writer_thread = threading.Thread(
-            target=self._write_loop, daemon=True, name="fanorona-net-writer"
-        )
-        self._reader_thread.start()
+        """Passa a entregar os eventos recebidos em `event_queue` e inicia a
+        thread de escrita (a que faz as chamadas RPC para o adversário)."""
+        with self._events_lock:
+            self._event_queue = event_queue
+            for event in self._pending:
+                event_queue.put(event)
+            self._pending.clear()
+        self._writer_thread = threading.Thread(target=self._write_loop, daemon=True, name="fanorona-rpc-writer")
         self._writer_thread.start()
 
-    # [TOUR 7/10] Do outro processo: esta thread está bloqueada em readline(), recebe a linha.
-    def _read_loop(self, event_queue: "queue.Queue") -> None:
-        try:
-            for line in self._reader:
-                self._dispatch(line, event_queue)
-        except OSError:
-            pass  # conexão caiu; tratado abaixo
-        finally:
-            if not self._closed:
-                self._closed = True
-                event_queue.put(("disconnected", "Conexão perdida com o adversário."))
+    def _emit(self, event: tuple) -> None:
+        with self._events_lock:
+            if self._event_queue is None:
+                self._pending.append(event)
+            else:
+                self._event_queue.put(event)
 
-    # [TOUR 6/10] Thread separada: tira da fila e faz o write()/flush() de verdade no socket.
+    def _on_peer_left(self) -> None:
+        """O adversário chamou `bye` (saiu da partida de propósito)."""
+        self._peer_gone = True
+        self._report_disconnected()
+        self._outgoing.put(_STOP)
+
+    def _report_disconnected(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._emit(("disconnected", "Conexão perdida com o adversário."))
+
     def _write_loop(self) -> None:
-        while True:
-            line = self._outgoing.get()  # bloqueia até ter algo para enviar
-            if line is _STOP:
-                return
-            try:
-                self._writer.write(line + "\n")
-                self._writer.flush()
-            except OSError:
-                return  # conexão caiu; a thread de leitura já vai reportar
+        try:
+            while True:
+                try:
+                    call = self._outgoing.get(timeout=PING_INTERVAL_S)
+                except queue.Empty:
+                    call = ("ping",)  # fila parada: confere se o adversário continua lá
+                if call is _STOP:
+                    self._say_goodbye()
+                    return
+                method, *args = call
+                try:
+                    # Chamada remota: `self._peer.move(...)` executa `move` no adversário.
+                    getattr(self._peer, method)(*args)
+                except RPC_ERRORS:
+                    self._report_disconnected()
+                    return
+        finally:
+            self._shutdown_server()
 
-    def _dispatch(self, line: str, event_queue: "queue.Queue") -> None:
-        trimmed = line.strip()
-        if not trimmed:
+    def _say_goodbye(self) -> None:
+        if self._peer is None or self._peer_gone:
             return
-
-        # [TOUR 8/10] Parsing: vira uma tupla e vai pra fila de eventos — não mexe na tela direto.
-        if trimmed.startswith("MOVE "):
-            parts = trimmed.split(" ")
-            if len(parts) < 6:
-                return
-            try:
-                fr, fc, tr, tc = (int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]))
-                choice = CaptureType[parts[5]]
-                event_queue.put(("move", Point(fr, fc), Point(tr, tc), choice))
-            except (ValueError, KeyError):
-                pass  # linha mal formada: ignora
-        elif trimmed == "ENDTURN":
-            event_queue.put(("endturn",))
-        elif trimmed == "RESIGN":
-            event_queue.put(("resign",))
-        elif trimmed == "REMATCH":
-            event_queue.put(("rematch",))
-        elif trimmed.startswith("CHAT "):
-            event_queue.put(("chat", trimmed[len("CHAT "):]))
+        try:
+            self._peer.bye()
+        except RPC_ERRORS:
+            pass  # o adversário já saiu ou caiu; nada a fazer
 
     # -----------------------------------------------------------------
-    # Envio: cada send_* apenas enfileira a linha; quem escreve de fato
-    # no socket é a thread de escrita (_write_loop).
+    # Envio: cada send_* apenas enfileira a chamada; quem faz a chamada RPC
+    # de fato é a thread de escrita (_write_loop).
     # -----------------------------------------------------------------
 
-    # [TOUR 5/10] Não escreve no socket — só monta a string do protocolo e enfileira.
     def send_move(self, frm: Point, to: Point, choice: Optional[CaptureType]) -> None:
         choice_name = "NONE" if choice is None else choice.name
-        self._enqueue(f"MOVE {frm.row} {frm.col} {to.row} {to.col} {choice_name}")
+        self._enqueue(("move", frm.row, frm.col, to.row, to.col, choice_name))
 
     def send_end_turn(self) -> None:
-        self._enqueue("ENDTURN")
+        self._enqueue(("end_turn",))
 
     def send_resign(self) -> None:
-        self._enqueue("RESIGN")
+        self._enqueue(("resign",))
 
     def send_rematch(self) -> None:
-        self._enqueue("REMATCH")
+        self._enqueue(("rematch",))
 
     def send_chat(self, message: str) -> None:
-        self._enqueue(f"CHAT {_sanitize(message)}")
+        self._enqueue(("chat", message))
 
-    def _enqueue(self, line: str) -> None:
+    def _enqueue(self, call: tuple) -> None:
         if not self._closed:
-            self._outgoing.put(line)
+            self._outgoing.put(call)
 
     def close(self) -> None:
         self._closed = True
-        self._outgoing.put(_STOP)  # acorda a thread de escrita para ela poder terminar
-        try:
-            # shutdown() age direto no socket do sistema operacional e por
-            # isso consegue interromper na hora um recv()/readline() que
-            # esteja bloqueado na thread de leitura; só chamar close() não
-            # seria suficiente aqui, porque o socket ainda tem referências
-            # abertas pelos objetos de arquivo criados via makefile().
-            self._sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
-            self._sock.close()
-        except OSError:
-            pass
+        self._outgoing.put(_STOP)  # a thread de escrita avisa com bye() e encerra o servidor
+        if self._writer_thread is None:  # start() nunca foi chamado: ninguém mais vai encerrar o servidor
+            self._shutdown_server()
+
+    def _shutdown_server(self) -> None:
+        with self._server_lock:
+            server, self._server = self._server, None
+        if server is not None:
+            server.shutdown()      # para o serve_forever
+            server.server_close()  # libera a porta

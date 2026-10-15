@@ -1,1 +1,1 @@
-"""Fanorona — jogo de tabuleiro com comunicação entre dois tabuleiros via sockets TCP."""
+"""Fanorona — jogo de tabuleiro com comunicação entre dois tabuleiros via RMI/RPC (XML-RPC)."""

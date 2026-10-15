@@ -88,8 +88,7 @@ Python seria mais fácil de explicar (ex.: para o professor da disciplina).
   - `fanorona/gui/`: `theme.py`, `dialogs.py`, `connect_screen.py`,
     `board_canvas.py`, `history_panel.py`, `chat_panel.py`, `game_screen.py`,
     `game_over_screen.py`, `game_over_info.py`, `main_app.py`.
-  - `main.py` (ponto de entrada) e `test_game_engine.py` (bateria de testes
-    do motor, porta do antigo `TestHarness.java`).
+  - `main.py` (ponto de entrada).
 - Diferenças de design relevantes:
   - Diálogos modais (confirmar desistência, escolha de captura ambígua) viraram
     `tk.Toplevel` com `grab_set()` — mais idiomático no Tkinter do que a
@@ -101,9 +100,8 @@ Python seria mais fácil de explicar (ex.: para o professor da disciplina).
     de eventos, esvaziada periodicamente pela janela principal via
     `root.after(...)` — o equivalente Python ao `SwingUtilities.invokeLater`
     do Java (Tkinter também não é thread-safe).
-- Validação sem precisar de GUI: `test_game_engine.py` (17 checagens, todas
-  `[OK]`, idêntico à versão Java) e um teste manual de rede (host + entrar +
-  troca de nomes + jogada), ambos rodados com sucesso antes mesmo do `tkinter`
+- Validação sem precisar de GUI: um teste manual de rede (host + entrar +
+  troca de nomes + jogada), rodado com sucesso antes mesmo do `tkinter`
   estar instalado no sistema do usuário.
 - O `tkinter` não vinha instalado por padrão no sistema (`ModuleNotFoundError`);
   orientado a instalar via `sudo apt-get install -y python3-tk`.
@@ -113,7 +111,7 @@ Python seria mais fácil de explicar (ex.: para o professor da disciplina).
 A pedido do usuário, todo o material Java foi removido do repositório:
 `src/`, `out/` (classes compiladas) e `Fanorona/` (outra pasta com `.class`
 antigos). A pasta `python/` (onde a porta havia sido criada) foi promovida
-para a raiz do projeto (arquivos `main.py`, `fanorona/`, `test_game_engine.py`
+para a raiz do projeto (arquivos `main.py` e `fanorona/`
 diretamente na raiz), e o `README.md` foi reescrito do zero para descrever
 apenas a versão Python.
 
@@ -220,7 +218,7 @@ só depois o histórico é empacotado para ocupar o espaço restante. Confirmado
 com uma captura de tela real do app rodando: agora aparecem histórico **e**
 campo de digitar + botão "→" corretamente.
 
-Testes re-executados após a correção: 17/17 testes do motor, rede (host +
+Testes re-executados após a correção: rede (host +
 entrar + jogada + chat + fechamento de 4 threads), análise estática
 (`pyflakes`) e fluxo completo bidirecional de chat — todos passando.
 
@@ -229,7 +227,7 @@ entrar + jogada + chat + fechamento de 4 threads), análise estática
 O `README.md` foi mantido atualizado ao longo de todo o processo, cobrindo:
 pré-requisitos e como executar (incluindo teste local com duas instâncias),
 estrutura do código, representação do tabuleiro, regras de movimento/captura,
-testes do motor, protocolo de rede (tabela de mensagens) e a seção de
+protocolo de rede (tabela de mensagens) e a seção de
 concorrência (threads de envio/recepção) pensada especificamente para a
 apresentação ao professor.
 

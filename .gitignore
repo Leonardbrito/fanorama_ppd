@@ -1,0 +1,6 @@
+# Dados e anotações do projeto
+dados/
+
+# Python
+__pycache__/
+*.pyc
