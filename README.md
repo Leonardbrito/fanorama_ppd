@@ -224,6 +224,69 @@ começa; quem entra joga com `Color.BLACK` (desenhada **dourada**) —
 `GameEngine.current_turn`; quem começa é decidido por convenção, sem troca de
 mensagem.
 
+### Roteiro de fala da seção 5 (2 a 3 minutos)
+
+**Colinha: onde ir no código** (`Ctrl+G` + número).
+
+| Passo | O que mostrar | Arquivo | Linha |
+| --- | --- | --- | --- |
+| 1 | host sobe o servidor e espera | `network_setup.py` | [41](fanorona/net/network_setup.py#L41), [43](fanorona/net/network_setup.py#L43) |
+| 2 | quem entra sobe o próprio servidor (porta 0) | `network_setup.py` | [68](fanorona/net/network_setup.py#L68) |
+| 3 | a chamada `register(minha_porta, meu_nome)` | `game_connection.py` | [196](fanorona/net/game_connection.py#L196) |
+| 4 | o host lê o IP de quem chamou | `game_connection.py` | [103](fanorona/net/game_connection.py#L103) |
+| 5 | o host cria o proxy de volta | `game_connection.py` | [215](fanorona/net/game_connection.py#L215) |
+| 6 | acorda o host e devolve o nome | `game_connection.py` | [216-218](fanorona/net/game_connection.py#L216-L218) |
+
+**Gancho (15 s)**
+
+> "Eu mostrei que cada tabuleiro é servidor e cliente ao mesmo tempo. Isso cria
+> um problema: **para eu ligar para você, preciso saber o seu número**. Quando a
+> partida começa, o host não sabe quem é o adversário nem onde ele está. O
+> `register` resolve isso."
+
+**O problema (30 s)** *(mostrar o diagrama desta seção)*
+
+> "Quem entra sabe o IP e a porta do host, porque o usuário digitou. O host não
+> sabe nada de quem entra. Só que o RPC é pedido e resposta: o host só consegue
+> falar com o adversário se **ele** também tiver um proxy. E para criar o proxy
+> precisa de IP e porta."
+
+**O pipeline (1 min 30 s)**
+
+1. *(linhas 41 e 43)* "O host sobe o servidor na porta escolhida e bloqueia
+   esperando alguém."
+2. *(linha 68)* "Quem entra sobe o **próprio** servidor, numa porta livre que o
+   sistema escolhe. É o 'ramal' onde o host vai poder me ligar de volta."
+3. *(linha 196)* "Aí eu chamo `register` no host, passando a minha porta e o meu
+   nome. É a única chamada em que a ordem importa, e é a primeira RPC da
+   partida."
+4. *(linha 103)* "Pense num telefone com identificador de chamadas: a porta eu
+   informo no argumento, mas o IP o host já enxerga na própria requisição HTTP.
+   Ele fica numa `threading.local`, porque cada chamada roda numa thread
+   diferente e cada uma precisa ver o seu."
+5. *(linha 215)* "Com IP e porta, o host cria o proxy de volta. **Nesse instante
+   o host passa a ser cliente também.**"
+6. *(linhas 216-218)* "Por fim, o `register` acorda o host e devolve o nome dele
+   como resposta. Os dois abrem a tela de jogo, e dali em diante o caminho de
+   envio e o de recepção são idênticos nos dois lados."
+
+**Fechamento (15 s)**
+
+> "O `register` é a chamada em que quem entra se apresenta como cliente e, de
+> quebra, entrega ao host o endereço para ele virar cliente também. Depois
+> disso não existe mais 'caminho do host' ou 'caminho de quem entrou'."
+
+**Se perguntarem**
+
+- *"E se um terceiro jogador tentar entrar?"* "O `_on_register` levanta um erro
+  ([213-214](fanorona/net/game_connection.py#L213-L214)). O XML-RPC transforma
+  isso num `Fault` e o terceiro vê 'esta partida já tem dois jogadores'. A
+  exceção atravessa a rede."
+- *"Funciona entre redes diferentes?"* "Na mesma rede, sim. Entre redes, o host
+  precisa chamar de volta o IP de quem entrou, então um firewall ou NAT dele
+  pode impedir. Com sockets isso não acontecia, porque só o host precisava de
+  porta aberta."
+
 ---
 
 ## 6. Fluxo completo de uma jogada
