@@ -421,6 +421,69 @@ Em LAN, imperceptível.
 O código é o mesmo nos dois processos: não existe "caminho do host" e "caminho
 do cliente". A única diferença entre os dois é quem chamou `register` no início.
 
+### Roteiro de fala da seção 6: as três perguntas certas (3 a 4 minutos)
+
+**Colinha: onde ir no código** (`Ctrl+G` + número).
+
+| Pergunta | O que mostrar | Arquivo | Linha |
+| --- | --- | --- | --- |
+| 1. Tela do outro | valida e aplica local | `game_screen.py` | [157](fanorona/gui/game_screen.py#L157) |
+| 1. Tela do outro | manda para a rede | `game_screen.py` | [177](fanorona/gui/game_screen.py#L177) |
+| 1. Tela do outro | o outro lado reaplica a mesma regra | `game_screen.py` | [279](fanorona/gui/game_screen.py#L279) |
+| 2. Como o RPC funciona | a chamada remota | `game_connection.py` | [266](fanorona/net/game_connection.py#L266) |
+| 2. Como o RPC funciona | o método que executa do outro lado | `game_connection.py` | [122](fanorona/net/game_connection.py#L122) |
+| 2. Como o RPC funciona | o XML real | README | [seção 8](#8-o-que-vai-de-fato-no-fio-xml-real) |
+| 3. Interface sem travar | `send_move` só enfileira | `game_connection.py` | [286](fanorona/net/game_connection.py#L286) |
+| 3. Interface sem travar | thread que chama o proxy | `game_connection.py` | [253](fanorona/net/game_connection.py#L253) |
+| 3. Interface sem travar | evento entra na fila de entrada | `game_connection.py` | [235](fanorona/net/game_connection.py#L235) |
+| 3. Interface sem travar | a janela lê a fila a cada 50 ms | `main_app.py` | [92](fanorona/gui/main_app.py#L92) |
+
+**1. "Como a tela do outro usuário é atualizada?"**
+
+A ideia central: não mando o tabuleiro, mando só a jogada.
+
+> "Quando eu clico, a interface chama o `GameEngine`, que valida e aplica a
+> jogada no meu tabuleiro. Eu já vejo o lance na hora, sem esperar a rede. Depois
+> envio ao adversário só **cinco números e uma string**: de onde, para onde e o
+> tipo de captura. Do outro lado, o servidor recebe isso, coloca numa fila e a
+> tela dele chama **o mesmo `try_move`**. Como as regras são determinísticas,
+> mesma posição mais mesma jogada dá o mesmo resultado, e os dois tabuleiros
+> ficam iguais."
+
+**2. "Como o RPC funciona?"**
+
+> "RPC é chamar um método que roda em outra máquina como se fosse local. Eu
+> escrevo `self._peer.move(1, 3, 2, 4, "NONE")`. Esse `_peer` é um **proxy**: ele
+> não tem `move`, mas pega o nome e os argumentos, monta um XML, manda por HTTP e
+> espera a resposta. Do outro lado, um servidor XML-RPC recebe, acha o método
+> `move` na classe `_GameService` e executa. O retorno volta pelo mesmo
+> caminho."
+
+**3. "Como a interface se liga ao RPC sem travar?"**
+
+> "A regra é: **a interface nunca toca a rede**. Para enviar, ela só coloca a
+> chamada numa fila e segue em frente. Uma thread separada tira da fila e faz a
+> chamada RPC, uma por vez, o que garante a ordem. Para receber, o servidor
+> também só coloca um evento numa fila. A janela principal esvazia essa fila a
+> cada 50 ms. Isso é porque o Tkinter só pode ser mexido pela thread principal."
+
+**Se ele insistir**
+
+- *"E se a jogada chegar fora de ordem?"* "Não chega. Uma thread só faz as
+  chamadas, uma de cada vez, então a ordem da fila é a ordem de chegada."
+- *"E se os tabuleiros divergirem?"* "O mesmo `GameEngine` roda nos dois lados,
+  sem sorteio nem dependência de relógio. Por isso só a jogada trafega."
+- *"Quanto demora até o outro ver?"* "A ida e volta da rede mais até 50 ms do
+  `_poll_events`. Numa rede local não se percebe."
+- *"Por que o `True` de retorno?"* "Significa que o evento já está na fila do
+  outro lado. Se a chamada falhar, a thread de escrita detecta e gera o evento
+  de desconexão."
+
+**Fechamento**
+
+> "O jogador que joga valida e vê na hora, a rede só carrega a decisão, e o outro
+> lado reaplica a mesma regra. A interface nunca fala com a rede, só com filas."
+
 ---
 
 ## 7. As threads de cada processo
