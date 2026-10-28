@@ -220,23 +220,24 @@ conhece o endereço de quem entra**. A solução é o método `register`:
 
 **Colinha: onde ir no código** (`Ctrl+G` + número).
 
-| Passo | O que mostrar | Arquivo | Linha |
-| --- | --- | --- | --- |
-| 1 | host sobe o servidor e espera | `network_setup.py` | [41](fanorona/net/network_setup.py#L41), [43](fanorona/net/network_setup.py#L43) |
-| 2 | quem entra sobe o próprio servidor (porta 0) | `network_setup.py` | [68](fanorona/net/network_setup.py#L68) |
-| 3 | a chamada `register(minha_porta, meu_nome)` | `game_connection.py` | [196](fanorona/net/game_connection.py#L196) |
-| 4 | o host lê o IP de quem chamou | `game_connection.py` | [103](fanorona/net/game_connection.py#L103) |
-| 5 | o host cria o proxy de volta | `game_connection.py` | [215](fanorona/net/game_connection.py#L215) |
-| 6 | acorda o host e devolve o nome | `game_connection.py` | [216-218](fanorona/net/game_connection.py#L216-L218) |
+Tudo começa no botão **Conectar** ([connect_screen.py:84](fanorona/gui/connect_screen.py#L84)),
+que chama `NetworkSetup.host` ([35](fanorona/net/network_setup.py#L35)) ou
+`NetworkSetup.join` ([62](fanorona/net/network_setup.py#L62)). Cada um roda numa
+thread própria para não travar a janela. A coluna "Passo" usa a numeração do
+diagrama acima.
 
-Funções em ordem: `ConnectScreen._do_connect`
-([connect_screen.py:84](fanorona/gui/connect_screen.py#L84)) →
-`NetworkSetup.host` ([35](fanorona/net/network_setup.py#L35)) ou `join`
-([62](fanorona/net/network_setup.py#L62)) → `listen`
-([174](fanorona/net/game_connection.py#L174)) → `connect_to`
-([191](fanorona/net/game_connection.py#L191)) → no host,
-`_GameService.register` ([117](fanorona/net/game_connection.py#L117)) →
-`_on_register` ([211](fanorona/net/game_connection.py#L211)).
+| Passo | Quem | O que mostrar | Arquivo | Linha |
+| --- | --- | --- | --- | --- |
+| 1-2 | host | sobe o servidor e espera | `network_setup.py` | [41](fanorona/net/network_setup.py#L41), [43](fanorona/net/network_setup.py#L43) |
+| 3 | quem entra | sobe o próprio servidor (porta 0) | `network_setup.py` | [68](fanorona/net/network_setup.py#L68) |
+| 4-5 | quem entra | cria o proxy do host e chama `register(minha_porta, meu_nome)` | `game_connection.py` | [195-196](fanorona/net/game_connection.py#L195-L196) |
+| 6 | host | ao receber a requisição, guarda o IP de quem chamou | `game_connection.py` | [103](fanorona/net/game_connection.py#L103) |
+| 6 | host | a chamada cai em `_GameService.register` e vai para `_on_register` | `game_connection.py` | [117-120](fanorona/net/game_connection.py#L117-L120), [211](fanorona/net/game_connection.py#L211) |
+| 6 | host | cria o proxy de volta | `game_connection.py` | [215](fanorona/net/game_connection.py#L215) |
+| 6-7 | host | acorda o `wait_for_peer` e devolve o nome | `game_connection.py` | [216-218](fanorona/net/game_connection.py#L216-L218) |
+
+Entre os passos 5 e 6 a chamada **atravessa a rede**: daí em diante o código roda
+na outra máquina.
 
 **Como o host descobre o IP de quem chamou?** Pela própria requisição HTTP:
 `_ThreadedXMLRPCServer.finish_request`
@@ -426,15 +427,6 @@ chama `send_*`, que só faz `queue.put`. Para receber, a GUI esvazia uma
   intervalo, `_emit` guarda o evento em `_pending` e `start()` o despeja na fila,
   na ordem.
 
-**Fala (2 min)**
-
-> "Chamar um método remoto bloqueia, e o Tkinter só pode ser mexido pela thread
-> principal. Por isso as duas direções passam por uma fila, cada uma com uma
-> thread cuidando dela. Na saída, o clique só enfileira e uma única thread faz as
-> chamadas, uma por vez, o que garante a ordem sem numerar mensagens. Na entrada,
-> o servidor atende cada chamada numa thread, só deposita o evento na fila e
-> devolve `True`; quem mexe na tela é a janela, que esvazia a fila a cada 50 ms."
-
 ---
 
 ## 7. O que vai no fio
@@ -515,8 +507,8 @@ de operações = mesmo estado final.
 3. engine remoto: o `try_move` do adversário **revalida tudo** ao receber
    (turno, limites, ligação entre casas, casa vazia, sequência...), então uma
    jogada ilegal que chegue pela rede **não altera o tabuleiro**. Limite
-   conhecido: `apply_remote_move` ignora o `Result`, então a tela ainda registra
-   a entrada no histórico (seção 12, limitações).
+   conhecido: `apply_remote_move` não confere se o resultado foi `INVALID`, então
+   a tela ainda registra a entrada no histórico (seção 12, limitações).
 
 ---
 
@@ -582,13 +574,11 @@ Num RPC, só o cliente inicia chamadas. Num jogo os **dois** precisam avisar o
 outro. Sem servidor central, cada um é servidor (recebe) e cliente (chama).
 Seção 3.
 
-**"Por que preciso do IP e da porta do adversário?"**
+**"Por que preciso do IP e da porta do adversário? E como o host descobre o IP de quem entrou?"**
 O proxy manda uma requisição HTTP, que precisa de endereço: o IP diz a máquina e
-a porta diz o programa. Seção 4.
-
-**"Como o host descobre o IP de quem entrou?"**
-Pela origem da requisição HTTP (`client_address[0]`), capturada em
-`finish_request`. Quem entra informa só a porta (`listen(0)`).
+a porta diz o programa. O host lê o IP na origem da requisição
+(`client_address[0]`, em `finish_request`); quem entra informa só a porta
+(`listen(0)`). Seção 4.
 
 **"Como a tela do outro é atualizada?"**
 Só a jogada trafega; o outro lado reaplica a mesma regra no mesmo `GameEngine`.
@@ -673,8 +663,7 @@ Ida e volta da rede + até 50 ms (intervalo do `_poll_events`).
    host para quem entra vão para a porta aleatória do outro servidor (a mesma
    que foi enviada no `register`).
 
-**Plano B (uma máquina só):** dois terminais, `python3 main.py` em cada um; um em
-*Hospedar*, o outro em *Entrar* com IP `localhost`.
+**Plano B (uma máquina só):** veja "Na mesma máquina" na seção [12](#12-referência).
 
 ---
 
@@ -714,21 +703,6 @@ Nomes começando com `_` nunca são expostos.
 | `CHAT texto` | `chat(texto)` |
 | (não existia) | `ping()` e `bye()` |
 
-### Cola das funções por etapa de uma jogada
-
-| # | etapa | quem joga | quem recebe |
-| --- | --- | --- | --- |
-| 1 | clique | `BoardCanvas` → `GameScreen._handle_point_clicked` | |
-| 2 | valida e aplica local | `GameScreen._attempt_move` → `GameEngine.try_move` | |
-| 3 | manda | `GameScreen._apply_local_result` → `GameConnection.send_move` → `_enqueue` | |
-| 4 | desenha | `board_canvas.redraw` | |
-| 5 | chamada RPC | `_write_loop` → `self._peer.move(...)` (proxy) | |
-| 6 | recebe e enfileira | | `_GameService.move` → `_emit` → `queue.Queue` |
-| 7 | responde | `True` volta e a escrita segue | |
-| 8 | consome | | `MainApp._poll_events` → `_handle_event` |
-| 9 | aplica | | `GameScreen.apply_remote_move` → `GameEngine.try_move` (a **mesma**) |
-| 10 | desenha | | `board_canvas.redraw` |
-
 ### Constantes
 
 ([game_connection.py:67](fanorona/net/game_connection.py#L67), [main_app.py:19](fanorona/gui/main_app.py#L19))
@@ -765,7 +739,7 @@ quem desiste executa `engine.resign(my_color)` local e quem recebe executa
 
 ### Como executar
 
-**Pré-requisitos:** Python 3.10+ e Tkinter (em algumas distros Linux vem
+**Pré-requisitos:** Python 3 (testado na 3.12) e Tkinter (em algumas distros Linux vem
 separado: `sudo apt-get install -y python3-tk`). Nenhum `pip install`: o projeto
 usa só a biblioteca padrão (`tkinter`, `xmlrpc`, `threading`, `queue`).
 
@@ -796,8 +770,9 @@ Tudo em [`game_engine.py`](fanorona/model/game_engine.py):
 - **Tabuleiro 5×9** (45 intersecções, 22 peças por jogador, casa central
   vazia). Vizinhas na horizontal e vertical sempre se ligam; as diagonais
   existem em metade das casas, alternadas (`Board.is_connected`).
-- **Movimento simples:** uma peça para casa vazia vizinha ligada por linha; só
-  vale se não houver captura e encerra o turno.
+- **Movimento simples:** uma peça para casa vazia vizinha ligada por linha, quando
+  o movimento não captura nada; só vale como primeiro movimento do turno e
+  encerra o turno.
 - **Captura por aproximação:** peças adversárias em sequência, na direção do
   movimento, logo à frente do destino.
 - **Captura por afastamento:** peças adversárias coladas à origem, na direção
@@ -818,12 +793,15 @@ Tudo em [`game_engine.py`](fanorona/model/game_engine.py):
 - **Os dois lados precisam ser alcançáveis:** o host chama de volta quem entrou,
   então firewall ou NAT do jogador que entra impede a conexão.
 - **Jogada ilegal recebida:** o engine do receptor a rejeita (o tabuleiro não
-  muda), mas `apply_remote_move` ignora o resultado e registra a entrada no
-  histórico mesmo assim.
+  muda), mas `apply_remote_move` não confere o tipo do resultado e registra a
+  entrada no histórico mesmo assim.
 - **`register` não é atômico:** `_on_register` verifica `self._peer is not None`
   sem lock. Dois jogadores chamando `register` no mesmo instante poderiam passar
   pela verificação; improvável num jogo com dois colegas.
 - **Detecção de queda em rede cortada** pode levar até o timeout (10 s).
+- **Captura não é obrigatória:** o engine aceita um movimento simples mesmo
+  quando há captura disponível em outra peça (`try_move` só olha o movimento
+  pedido).
 - **Quem começa é fixo:** quem hospeda joga primeiro.
 - Sem testes automatizados; a validação foi jogando com duas instâncias.
 - Sem placar de partidas anteriores nem replay.
