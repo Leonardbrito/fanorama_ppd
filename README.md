@@ -15,19 +15,34 @@ dizem para onde ir.
 
 ---
 
-## Roteiro em 6 blocos (cerca de 12 minutos)
+## Roteiro da apresentação (cerca de 9 minutos)
+
+A apresentação principal é o pipeline das seções **3, 4 e 5**. O resto do
+documento fica de reserva para as perguntas.
 
 | # | Bloco | Tempo | Frase-chave | Mostrar no código | Seção |
 | --- | --- | --- | --- | --- | --- |
-| 1 | A ideia | 1 min | "Não há servidor do jogo; trocamos jogadas, não tabuleiros." | nada, só a frase acima | [1](#1-resumo-de-30-segundos) |
-| 2 | Cliente e servidor | 2 min | "Cada máquina tem um servidor para receber e um proxy para chamar." | [`listen` 174](fanorona/net/game_connection.py#L174), [`_make_proxy` 206](fanorona/net/game_connection.py#L206) | [3](#3-por-que-os-dois-são-cliente-e-servidor) |
-| 3 | Conexão (`register`) | 3 min | "Para o host me ligar de volta, eu informo a minha porta." | [network_setup 41](fanorona/net/network_setup.py#L41), [68](fanorona/net/network_setup.py#L68); [game_connection 196](fanorona/net/game_connection.py#L196), [103](fanorona/net/game_connection.py#L103), [215](fanorona/net/game_connection.py#L215) | [4](#4-conexão-e-o-register) |
-| 4 | Uma jogada | 3 min | "Valido e vejo na hora; a rede só carrega a decisão." | [game_screen 157](fanorona/gui/game_screen.py#L157), [177](fanorona/gui/game_screen.py#L177), [279](fanorona/gui/game_screen.py#L279); [game_connection 266](fanorona/net/game_connection.py#L266), [122](fanorona/net/game_connection.py#L122) | [5](#5-uma-jogada-do-clique-à-tela-do-outro) |
-| 5 | Threads e filas | 2 min | "A interface nunca toca a rede; só enfileira e lê filas." | [game_connection 95](fanorona/net/game_connection.py#L95), [253](fanorona/net/game_connection.py#L253), [235](fanorona/net/game_connection.py#L235); [main_app 92](fanorona/gui/main_app.py#L92) | [6](#6-threads-e-filas) |
-| 6 | Queda e demonstração | 1 min + demo | "Sem conexão aberta, a queda se descobre com `ping` e `bye`." | [game_connection 253-268](fanorona/net/game_connection.py#L253-L268), [145](fanorona/net/game_connection.py#L145) | [9](#9-queda-de-conexão), [11](#11-roteiro-de-demonstração) |
+| 0 | Abertura | 30 s | "Não há servidor do jogo. E RPC é chamar um método de outra máquina como se fosse local." | nada, só a frase-tese acima | [1](#1-resumo-de-30-segundos), [2](#2-rpc-rmi-stub-e-skeleton) |
+| 1 | Cliente e servidor | 2 min | "Cada máquina tem um servidor para receber e um proxy para chamar." | [`listen` 174](fanorona/net/game_connection.py#L174), [`_make_proxy` 206](fanorona/net/game_connection.py#L206), [chamada 266](fanorona/net/game_connection.py#L266) | [3](#3-por-que-os-dois-são-cliente-e-servidor) |
+| 2 | Conexão (`register`) | 3 min | "Para o host me ligar de volta, eu informo a minha porta." | [network_setup 41](fanorona/net/network_setup.py#L41), [68](fanorona/net/network_setup.py#L68); [game_connection 196](fanorona/net/game_connection.py#L196), [103](fanorona/net/game_connection.py#L103), [215](fanorona/net/game_connection.py#L215) | [4](#4-conexão-e-o-register) |
+| 3 | Uma jogada | 3 a 4 min | "Valido e vejo na hora; a rede só carrega a decisão." | [game_screen 157](fanorona/gui/game_screen.py#L157), [177](fanorona/gui/game_screen.py#L177), [279](fanorona/gui/game_screen.py#L279); [game_connection 266](fanorona/net/game_connection.py#L266), [122](fanorona/net/game_connection.py#L122) | [5](#5-uma-jogada-do-clique-à-tela-do-outro) |
 
-Perguntas do professor: seção [10](#10-perguntas-prováveis). Tabelas de
-consulta (métodos, constantes, como executar): seção [12](#12-referência).
+Feche com a frase do fim da seção 5: *"O jogador que joga valida e vê na hora, a
+rede só carrega a decisão, e o outro lado reaplica a mesma regra. A interface
+nunca fala com a rede, só com filas."*
+
+### Se perguntarem
+
+| Se o professor perguntar... | Vá para |
+| --- | --- |
+| O que é RPC, RMI, stub, skeleton? Isso é RMI de verdade? | seção [2](#2-rpc-rmi-stub-e-skeleton) |
+| Por que fila e thread? Por que a interface não chama a rede? | seção [6](#6-threads-e-filas) (a resposta curta já está na pergunta 3 da seção 5) |
+| O que vai de fato pela rede? | seção [7](#7-o-que-vai-no-fio) (XML real) |
+| Por que os tabuleiros ficam iguais? E jogada fora da vez? Por que `end_turn`? | seção [8](#8-por-que-os-tabuleiros-ficam-iguais) |
+| E se a conexão cair? Mensagem perdida ou duplicada? | seção [9](#9-queda-de-conexão) |
+| Qualquer outra pergunta | seção [10](#10-perguntas-prováveis) |
+| Demonstração ao vivo | seção [11](#11-roteiro-de-demonstração) |
+| Métodos remotos, constantes, chat, como executar, limitações | seção [12](#12-referência) |
 
 ---
 
@@ -122,6 +137,33 @@ O papel muda conforme o momento da partida:
 O servidor fica sempre de pé numa thread própria; o cliente fica sempre pronto
 para chamar. Como o Fanorona é por turnos, parece que alternamos, mas os dois
 papéis ficam ativos a partida inteira.
+
+**Colinha: onde ir no código** (`Ctrl+G` + número).
+
+| Papel | O que mostrar | Arquivo | Linha |
+| --- | --- | --- | --- |
+| **servidor** | a classe do servidor, uma thread por chamada | `game_connection.py` | [95-104](fanorona/net/game_connection.py#L95-L104) |
+| **servidor** | os métodos que o adversário pode chamar | `game_connection.py` | [107-147](fanorona/net/game_connection.py#L107-L147) |
+| **servidor** | `listen`: sobe o servidor e fica escutando | `game_connection.py` | [174-179](fanorona/net/game_connection.py#L174-L179) |
+| **cliente** | onde o proxy fica guardado | `game_connection.py` | [154](fanorona/net/game_connection.py#L154) |
+| **cliente** | `_make_proxy`: cria o proxy com `http://IP:porta` | `game_connection.py` | [206-209](fanorona/net/game_connection.py#L206-L209) |
+| **cliente** | a chamada remota em si | `game_connection.py` | [266](fanorona/net/game_connection.py#L266) |
+| **cliente** | `send_move`: só enfileira | `game_connection.py` | [286](fanorona/net/game_connection.py#L286) |
+| **cliente** | `ping()` quando a fila fica parada | `game_connection.py` | [258-259](fanorona/net/game_connection.py#L258-L259) |
+| **servidor** | `bye()` recebido: vira `"disconnected"` | `game_connection.py` | [145-147](fanorona/net/game_connection.py#L145-L147) |
+
+Os dois papéis lado a lado, no mesmo arquivo:
+
+```python
+# SERVIDOR: game_connection.py, linhas 176-179 (listen)
+server = _ThreadedXMLRPCServer(("", port), logRequests=False, allow_none=True)
+server.register_instance(_GameService(self))     # expõe os métodos de _GameService
+threading.Thread(target=server.serve_forever, ...).start()   # fica escutando
+
+# CLIENTE: game_connection.py, linhas 206-209 (_make_proxy) e 266 (_write_loop)
+xmlrpc.client.ServerProxy(f"http://{host}:{port}", ...)      # o proxy do adversário
+getattr(self._peer, method)(*args)               # chama o método no servidor dele
+```
 
 **Antes (sockets) e agora (RPC):**
 
