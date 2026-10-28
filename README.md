@@ -125,14 +125,16 @@ Jogador A                                Jogador B
 [proxy de B]  ---------------------->    [servidor RPC: move, chat, ...]
 ```
 
-**Fala do desenho (30 s)**
+**Fala dos dois canais (30 s)** *(não depende do desenho)*
 
-> "Cada jogador tem duas caixas: um **servidor**, que recebe, e um **proxy**, que
-> chama. O nome do proxy diz quem está do outro lado: o 'proxy de B' é o que o
-> jogador A usa para falar com B. Então, na linha de baixo, A chama B; na de
-> cima, B chama A. Cada linha é um canal, em uma direção. Se tivesse só uma,
-> só um dos dois conseguiria avisar o outro. O código é o mesmo nos dois lados:
-> o `self._peer` de A aponta para B, e o de B aponta para A."
+> "Cada jogador roda duas coisas: um **servidor**, que fica esperando chamadas, e
+> um **proxy**, que é o que ele usa para chamar o outro. Quando eu, jogador A,
+> faço uma jogada, uso o meu proxy, que aponta para o B, e a chamada executa no
+> servidor do B. Quando o B joga, é o contrário: ele usa o proxy dele, que aponta
+> para mim, e a chamada executa no meu servidor. São dois caminhos, um em cada
+> direção. Com um só, apenas um dos dois conseguiria avisar o outro. E o código é
+> o mesmo nos dois lados: o `self._peer` de cada um aponta sempre para o
+> adversário."
 
 O papel muda conforme o momento da partida:
 
