@@ -27,7 +27,7 @@ documento fica de reserva para as perguntas.
 | 2 | Conexão (`register`) | 3 min | "Para o host me ligar de volta, eu informo a minha porta." | [network_setup 41](fanorona/net/network_setup.py#L41), [68](fanorona/net/network_setup.py#L68); [game_connection 196](fanorona/net/game_connection.py#L196), [103](fanorona/net/game_connection.py#L103), [215](fanorona/net/game_connection.py#L215) | [4](#4-conexão-e-o-register) |
 | 3 | Uma jogada | 3 a 4 min | "Valido e vejo na hora; a rede só carrega a decisão." | [game_screen 157](fanorona/gui/game_screen.py#L157), [177](fanorona/gui/game_screen.py#L177), [279](fanorona/gui/game_screen.py#L279); [game_connection 266](fanorona/net/game_connection.py#L266), [122](fanorona/net/game_connection.py#L122) | [5](#5-uma-jogada-do-clique-à-tela-do-outro) |
 
-Feche com a frase do fim da seção 5: *"O jogador que joga valida e vê na hora, a
+Feche com a última frase da fala curta da seção 5: *"O jogador que joga valida e vê na hora, a
 rede só carrega a decisão, e o outro lado reaplica a mesma regra. A interface
 nunca fala com a rede, só com filas."*
 
@@ -187,6 +187,40 @@ com os mesmos eventos, o `root.after(50 ms)` na janela e os métodos `send_*`.
 > dele. Quando eu jogo, sou cliente. Quando ele joga, sou servidor. O servidor
 > fica sempre escutando; o cliente fica sempre pronto para chamar."
 
+**Fala curta: o que cada trecho faz (1 min 30 s)** *(na ordem da colinha)*
+
+*Servidor, o lado que recebe:*
+
+1. *(linhas 95-104)* "Esta classe é o servidor. O `SimpleXMLRPCServer` é o que o
+   Python já traz: ele escuta numa porta, recebe a requisição HTTP com o XML,
+   acha o método pedido e o executa. Eu acrescentei o `ThreadingMixIn`, para
+   cada chamada rodar na sua própria thread, e guardo o IP de quem chamou."
+2. *(linhas 107-147)* "Estes são os métodos que o adversário pode chamar em mim:
+   `move`, `chat`, `resign`... Cada um só coloca um evento numa fila e devolve
+   `True`. Fica numa classe separada para que só esses métodos fiquem expostos."
+3. *(linhas 174-179)* "O `listen` junta tudo: cria o servidor na porta, registra
+   esta classe como o objeto que atende as chamadas e deixa o `serve_forever`
+   rodando numa thread. A partir daqui a máquina está escutando."
+
+*Cliente, o lado que chama:*
+
+4. *(linha 154)* "Aqui fica guardado o proxy do adversário. Começa vazio e é
+   preenchido na conexão."
+5. *(linhas 206-209)* "O `_make_proxy` cria esse proxy a partir de um endereço
+   `http://IP:porta`, com um limite de 10 segundos de espera."
+6. *(linha 286)* "O `send_move` não usa a rede. Só transforma a jogada em
+   números e texto e coloca na fila de saída."
+7. *(linha 266)* "Esta é a chamada de verdade. A thread de escrita tira da fila e
+   chama o método no proxy. Quem executa é a outra máquina, e esta linha espera a
+   resposta."
+
+*Quando não há jogada:*
+
+8. *(linhas 258-259)* "Se a fila ficar 3 segundos parada, a thread chama `ping()`
+   no adversário, só para saber se ele ainda está lá."
+9. *(linhas 145-147)* "E o `bye()` é o aviso de que o adversário saiu. Ele vira
+   o evento 'desconectado' e a partida volta para a tela inicial."
+
 ---
 
 ## 4. Conexão e o register
@@ -256,16 +290,43 @@ começa; quem entra joga com `Color.BLACK` (desenhada **dourada**)
 [114](fanorona/gui/connect_screen.py#L114)). Quem começa é decidido por
 convenção, sem troca de mensagem.
 
-**Fala (2 a 3 min)**
+**Fala curta: o que cada trecho faz (2 a 3 min)** *(na ordem da colinha)*
 
-> "Para eu ligar para você, preciso saber o seu número. Quando a partida começa,
-> o host não sabe onde está o adversário. Quem entra sobe o **próprio** servidor
-> numa porta livre, o 'ramal' onde o host vai poder me ligar de volta, e chama
-> `register` no host passando essa porta e o nome. Pense num telefone com
-> identificador de chamadas: a porta eu informo no argumento, mas o IP o host já
-> enxerga na própria requisição. Com os dois, o host cria o proxy de volta, e
-> **nesse instante o host passa a ser cliente também**. Depois disso não existe
-> mais 'caminho do host' ou 'caminho de quem entrou'."
+> Abertura: "Para eu ligar para você, preciso saber o seu número. Quando a
+> partida começa, o host não sabe onde está o adversário. O `register` resolve
+> isso."
+
+*No host:*
+
+1. *(linhas 41 e 43)* "O host sobe o servidor na porta escolhida e fica parado,
+   esperando alguém se registrar."
+
+*Em quem entra:*
+
+2. *(linha 68)* "Quem entra também sobe um servidor, numa porta livre que o
+   sistema escolhe. É o 'ramal' onde o host vai poder me ligar de volta."
+3. *(linhas 195-196)* "Aqui eu crio o proxy do host, com o IP e a porta que o
+   usuário digitou, e chamo `register` passando a minha porta e o meu nome. É a
+   primeira chamada RPC da partida. Daqui em diante o código roda na outra
+   máquina."
+
+*De volta ao host:*
+
+4. *(linha 103)* "Antes do `register` executar, o servidor já guardou o IP de quem
+   chamou. Pense num identificador de chamadas: a porta eu informei, o IP ele
+   enxerga sozinho. Fica numa `threading.local` porque cada chamada roda numa
+   thread."
+5. *(linhas 117-120 e 211)* "A chamada cai no `register` e vai para o
+   `_on_register`. Ali o host confere que ainda não tem adversário; se já
+   tiver, recusa com erro (linhas 213-214)."
+6. *(linha 215)* "Com IP e porta, o host cria o proxy de volta. **Nesse instante o
+   host passa a ser cliente também.**"
+7. *(linhas 216-218)* "Por fim, acorda o `wait_for_peer` e devolve o nome. Quem
+   entra recebe esse nome como retorno da chamada, e as duas telas de jogo
+   abrem."
+
+> Fechamento: "Depois disso não existe mais 'caminho do host' ou 'caminho de quem
+> entrou'. Os dois lados se chamam do mesmo jeito."
 
 **Se perguntarem**
 
@@ -321,6 +382,37 @@ thread de escrita (_write_loop)
 | 9-10 | a janela lê a fila e despacha | `main_app.py` | [92](fanorona/gui/main_app.py#L92), [101](fanorona/gui/main_app.py#L101) |
 | 11 | o adversário reaplica a regra | `game_screen.py` | [279](fanorona/gui/game_screen.py#L279) |
 
+**Fala curta: o que cada trecho faz (3 min)** *(na ordem da colinha)*
+
+*Em quem joga:*
+
+1. *(linha 121)* "O clique chega aqui. Primeiro filtro: o jogo acabou? É a minha
+   vez? Se não for, ignora."
+2. *(linha 157, e `try_move` na linha 96 do engine)* "Aqui eu valido e aplico a
+   jogada no meu tabuleiro. Se a captura for ambígua, o diálogo abre antes de
+   qualquer coisa ir para a rede."
+3. *(linhas 171 e 177)* "Se a jogada foi válida, mando para a rede com
+   `send_move`. Quem jogou já vê o lance na tela, sem esperar resposta."
+4. *(linha 286)* "O `send_move` não usa a rede. Só transforma a jogada em números e
+   texto e coloca na fila de saída."
+5. *(linhas 253 e 266)* "A thread de escrita tira da fila e faz a chamada de
+   verdade: `self._peer.move(...)`. Quem executa é a outra máquina."
+
+*No adversário:*
+
+6. *(linha 122)* "Uma thread do servidor executa o `move`. Ele reconstrói o
+   `Point` e o `CaptureType` a partir do que veio no XML, põe o evento na fila e
+   devolve `True`. Não mexe na tela."
+7. *(linha 235)* "O `_emit` é quem põe o evento na fila de entrada."
+8. *(`main_app.py`, linhas 92 e 101)* "A janela principal esvazia essa fila a cada
+   50 ms e despacha pelo nome do evento. Só a thread principal mexe no Tkinter."
+9. *(linha 279)* "O `apply_remote_move` chama o **mesmo** `try_move`. Mesma regra,
+   mesmo estado, mesmo resultado. Redesenha, e o adversário vê o lance."
+
+> Fechamento: "O jogador que joga valida e vê na hora, a rede só carrega a decisão,
+> e o outro lado reaplica a mesma regra. A interface nunca fala com a rede, só com
+> filas."
+
 **Detalhes que valem dizer**
 
 - **Passos 1-2:** se houver captura ambígua (aproximação *e* afastamento), o
@@ -343,7 +435,7 @@ thread de escrita (_write_loop)
 - **Latência:** ida e volta da rede + até 50 ms (o `_poll_events`). Em rede
   local, imperceptível.
 
-**Fala: as três perguntas certas (3 a 4 min)**
+**Se perguntarem: as três perguntas certas**
 
 **1. "Como a tela do outro usuário é atualizada?"** A ideia central: não mando o
 tabuleiro, mando só a jogada.
@@ -372,11 +464,6 @@ tabuleiro, mando só a jogada.
 > chamada RPC, uma por vez, o que garante a ordem. Para receber, o servidor
 > também só coloca um evento numa fila. A janela principal esvazia essa fila a
 > cada 50 ms. Isso é porque o Tkinter só pode ser mexido pela thread principal."
-
-**Fechamento:**
-
-> "O jogador que joga valida e vê na hora, a rede só carrega a decisão, e o outro
-> lado reaplica a mesma regra. A interface nunca fala com a rede, só com filas."
 
 ---
 
