@@ -152,33 +152,6 @@ papéis ficam ativos a partida inteira.
 | **cliente** | `ping()` quando a fila fica parada | `game_connection.py` | [258-259](fanorona/net/game_connection.py#L258-L259) |
 | **servidor** | `bye()` recebido: vira `"disconnected"` | `game_connection.py` | [145-147](fanorona/net/game_connection.py#L145-L147) |
 
-Os dois papéis lado a lado, no mesmo arquivo:
-
-```python
-# SERVIDOR: game_connection.py, linhas 176-179 (listen)
-server = _ThreadedXMLRPCServer(("", port), logRequests=False, allow_none=True)
-server.register_instance(_GameService(self))     # expõe os métodos de _GameService
-threading.Thread(target=server.serve_forever, ...).start()   # fica escutando
-
-# CLIENTE: game_connection.py, linhas 206-209 (_make_proxy) e 266 (_write_loop)
-xmlrpc.client.ServerProxy(f"http://{host}:{port}", ...)      # o proxy do adversário
-getattr(self._peer, method)(*args)               # chama o método no servidor dele
-```
-
-**Antes (sockets) e agora (RPC):**
-
-| | Sockets TCP (versão anterior) | XML-RPC (agora) |
-| --- | --- | --- |
-| conexão | uma, aberta a partida inteira | nenhuma fixa: cada chamada é uma requisição HTTP |
-| mensagens | texto à mão (`MOVE 2 2 2 3 NONE`) com *parsing* | chamada de método; a biblioteca monta e lê o XML |
-| papéis | host = servidor, quem entra = cliente, só até conectar | os dois são servidor e cliente a partida inteira |
-| thread de leitura | própria, bloqueada em `readline()` | não existe: o servidor cria uma thread por chamada |
-| detectar queda | automático (`readline()` termina) | manual: `ping()` e `bye()` |
-| porta acessível | só a do host | **as duas** (o host chama de volta) |
-
-O que **não** mudou: a fila de saída e a thread de escrita, a fila de entrada
-com os mesmos eventos, o `root.after(50 ms)` na janela e os métodos `send_*`.
-
 **Fala (2 min)**
 
 > "Num RPC clássico só o cliente começa a conversa. Mas num jogo os dois
@@ -270,25 +243,6 @@ diagrama acima.
 | 6 | host | cria o proxy de volta | `game_connection.py` | [215](fanorona/net/game_connection.py#L215) |
 | 6-7 | host | acorda o `wait_for_peer` e devolve o nome | `game_connection.py` | [216-218](fanorona/net/game_connection.py#L216-L218) |
 
-Entre os passos 5 e 6 a chamada **atravessa a rede**: daí em diante o código roda
-na outra máquina.
-
-**Como o host descobre o IP de quem chamou?** Pela própria requisição HTTP:
-`_ThreadedXMLRPCServer.finish_request`
-([100](fanorona/net/game_connection.py#L100)) guarda `client_address[0]` numa
-`threading.local` (`_request_ctx`). Roda na thread da requisição, então cada
-chamada vê o seu IP. Quem entra só informa a **porta**.
-
-**Terceiro jogador:** `_on_register` levanta `RuntimeError`
-([213-214](fanorona/net/game_connection.py#L213-L214)); o `xmlrpc` transforma
-isso num `Fault` e o terceiro vê *"Esta partida já tem dois jogadores"*. Isso só
-é possível porque o servidor do host continua no ar a partida inteira.
-
-**Quem é quem:** o host joga com `Color.WHITE` (desenhada como peça **escura**) e
-começa; quem entra joga com `Color.BLACK` (desenhada **dourada**)
-([connect_screen.py:100](fanorona/gui/connect_screen.py#L100) e
-[114](fanorona/gui/connect_screen.py#L114)). Quem começa é decidido por
-convenção, sem troca de mensagem.
 
 **Fala curta: o que cada trecho faz (2 a 3 min)** *(na ordem da colinha)*
 
