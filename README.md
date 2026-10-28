@@ -27,6 +27,15 @@ documento fica de reserva para as perguntas.
 | 2 | Conexão (`register`) | 3 min | "Para o host me ligar de volta, eu informo a minha porta." | [network_setup 41](fanorona/net/network_setup.py#L41), [68](fanorona/net/network_setup.py#L68); [game_connection 196](fanorona/net/game_connection.py#L196), [103](fanorona/net/game_connection.py#L103), [215](fanorona/net/game_connection.py#L215) | [4](#4-conexão-e-o-register) |
 | 3 | Uma jogada | 3 a 4 min | "Valido e vejo na hora; a rede só carrega a decisão." | [game_screen 157](fanorona/gui/game_screen.py#L157), [177](fanorona/gui/game_screen.py#L177), [279](fanorona/gui/game_screen.py#L279); [game_connection 266](fanorona/net/game_connection.py#L266), [122](fanorona/net/game_connection.py#L122) | [5](#5-uma-jogada-do-clique-à-tela-do-outro) |
 
+**Fala de abertura (30 s)**
+
+> "Este trabalho é a evolução do anterior. Antes, os dois tabuleiros conversavam
+> por sockets, com um protocolo de texto que eu escrevia e lia à mão. Agora a
+> comunicação é por **RPC**: em vez de montar mensagens, um tabuleiro chama um
+> método no outro, como `move(...)`, e a biblioteca cuida do resto. O jogo e a
+> interface continuam os mesmos; mudou a camada de rede. E um detalhe que muda
+> tudo: agora cada máquina é **servidor e cliente ao mesmo tempo**."
+
 Feche com a última frase da fala curta da seção 5: *"O jogador que joga valida e vê na hora, a
 rede só carrega a decisão, e o outro lado reaplica a mesma regra. A interface
 nunca fala com a rede, só com filas."*
